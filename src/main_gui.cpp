@@ -15,6 +15,7 @@
 #include <cmath>
 #include <filesystem>
 #include <unordered_map>
+#include <optional>
 
 #include <openvr.h>
 
@@ -314,6 +315,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+    glfwWindowHint(GLFW_SCALE_TO_MONITOR, GLFW_TRUE); // Window size follows Windows display scaling
 
     GLFWwindow* window = glfwCreateWindow(720, 690, "Synthos VR Dynamic Resolution Scaler", NULL, NULL);
     if (!window) {
@@ -323,7 +325,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     }
 
     glfwMakeContextCurrent(window);
-    glfwSwapInterval(1);
+    glfwSwapInterval(0); // Frame rate is paced manually at the end of the main loop
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -351,6 +353,19 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     style.Colors[ImGuiCol_FrameBgHovered]     = ImVec4(0.22f, 0.24f, 0.28f, 1.00f);
     style.Colors[ImGuiCol_SliderGrab]         = ImVec4(0.25f, 0.55f, 0.95f, 1.00f);
     style.Colors[ImGuiCol_SliderGrabActive]   = ImVec4(0.35f, 0.65f, 1.00f, 1.00f);
+
+    // High-DPI: scale the font and fixed sizes by the monitor's content scale (1.0 at 100%, 1.5 at 150%, ...)
+    float uiScale = 1.0f;
+    {
+        float xs = 1.0f, ys = 1.0f;
+        glfwGetWindowContentScale(window, &xs, &ys);
+        uiScale = std::clamp(xs, 1.0f, 4.0f);
+    }
+    style.ScaleAllSizes(uiScale);
+    ImFontConfig fontConfig;
+    fontConfig.SizePixels = std::round(13.0f * uiScale);
+    io.Fonts->AddFontDefault(&fontConfig);
+    auto px = [uiScale](float v) { return v * uiScale; };
 
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init("#version 130");
@@ -425,6 +440,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     vr::VROverlayHandle_t overlayHandle = vr::k_ulOverlayHandleInvalid;
     bool steamVRActive = false;
     bool configChanged = false;
+    std::optional<std::chrono::steady_clock::time_point> pendingSaveAt;
     auto lastVRCheckTime = std::chrono::steady_clock::now() - std::chrono::seconds(10);
 
     // Main GUI Loop
@@ -745,8 +761,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
             ImGui::TextColored(ImVec4(0.85f, 0.65f, 0.25f, 1.00f), "[ SETTINGS MODE - STEAMVR IDLE ]");
         }
 
-        ImGui::SameLine(ImGui::GetWindowWidth() - 190);
-        if (ImGui::Button("Register with SteamVR", ImVec2(175, 24))) {
+        ImGui::SameLine(ImGui::GetWindowWidth() - px(190));
+        if (ImGui::Button("Register with SteamVR", ImVec2(px(175), px(24)))) {
             if (registerManifestWithSteamVR()) {
                 statusMessage = "Registered! Restart SteamVR to see Synthos VR Dynamic Resolution Scaler in Startup Overlay Apps.";
             } else {
@@ -759,7 +775,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         // --- TELEMETRY DASHBOARD ---
         if (ImGui::CollapsingHeader("Live Telemetry & Resolution Readout", ImGuiTreeNodeFlags_DefaultOpen)) {
             ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.12f, 0.13f, 0.16f, 1.00f));
-            ImGui::BeginChild("TelemetryFrame", ImVec2(0, 160), true);
+            ImGui::BeginChild("TelemetryFrame", ImVec2(0, px(160)), true);
 
             int hzIdx = std::clamp(config.selectedHzIndex, 0, (int)IM_ARRAYSIZE(hzValues) - 1);
             float effHz = config.autoDetectHz ? (config.useHalfRateSSW ? activeHz / 2.0f : activeHz) : hzValues[hzIdx];
@@ -809,7 +825,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
                 // DUAL OVERLAID GRAPH (GPU = Warm Orange | CPU = Cyan Blue)
                 float graphMaxMs = (std::max)(25.0f, frameBudgetMs * 1.5f);
-                ImVec2 graphSize = ImVec2(-1, 55);
+                ImVec2 graphSize = ImVec2(-1, px(55));
                 ImVec2 cursorBeforeGraph = ImGui::GetCursorPos();
 
                 // 1. Draw CPU Line in Cyan Blue
@@ -825,7 +841,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
                 ImGui::Columns(1);
             } else {
-                ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 40);
+                ImGui::SetCursorPosY(ImGui::GetCursorPosY() + px(40));
                 ImGui::TextColored(ImVec4(0.85f, 0.65f, 0.25f, 1.0f), "  [SETTINGS EDITOR MODE] SteamVR is currently not open.");
                 ImGui::TextDisabled("  Adjust settings below. When SteamVR launches, dynamic resolution will connect automatically.");
             }
@@ -925,12 +941,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
                     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.85f, 0.25f, 0.25f, 1.00f));
                     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.95f, 0.35f, 0.35f, 1.00f));
                     ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.70f, 0.15f, 0.15f, 1.00f));
-                    if (ImGui::Button("FORCE 50% RESOLUTION: [ ACTIVE ]", ImVec2(320, 28))) {
+                    if (ImGui::Button("FORCE 50% RESOLUTION: [ ACTIVE ]", ImVec2(px(320), px(28)))) {
                         pShared->debugForceBlack = false;
                     }
                     ImGui::PopStyleColor(3);
                 } else {
-                    if (ImGui::Button("FORCE 50% RESOLUTION: [ OFF ]", ImVec2(320, 28))) {
+                    if (ImGui::Button("FORCE 50% RESOLUTION: [ OFF ]", ImVec2(px(320), px(28)))) {
                         pShared->debugForceBlack = true;
                     }
                 }
@@ -946,20 +962,26 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
             }
         }
 
+        // Debounced save: dragging a slider changes the config every frame, so write once it settles
         if (configChanged) {
+            pendingSaveAt = now + std::chrono::milliseconds(500);
+            configChanged = false;
+        }
+        if (pendingSaveAt && now >= *pendingSaveAt) {
             statusMessage = saveConfigToFile(configPath, config)
                 ? "Settings saved to settings.ini"
                 : "ERROR: Could not save settings to " + configPathStr;
-            configChanged = false;
+            pendingSaveAt.reset();
         }
 
         ImGui::Spacing();
         ImGui::Separator();
 
-        if (ImGui::Button("Save Settings Now", ImVec2(140, 24))) {
+        if (ImGui::Button("Save Settings Now", ImVec2(px(140), px(24)))) {
             statusMessage = saveConfigToFile(configPath, config)
                 ? "Settings manually saved to settings.ini"
                 : "ERROR: Could not save settings to " + configPathStr;
+            pendingSaveAt.reset();
         }
         ImGui::SameLine();
         ImGui::TextDisabled("%s", statusMessage.c_str());
@@ -976,10 +998,17 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
         glfwSwapBuffers(window);
 
-        // Low CPU usage throttle when idle or minimized
-        if (!steamVRActive || glfwGetWindowAttrib(window, GLFW_ICONIFIED)) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(16));
-        }
+        // Frame pacing: while VR runs, this window shares the GPU with the game, so redraw sparingly.
+        // ~30 fps while you're using the window, ~10 fps in the background (e.g. while in the headset).
+        // Timing data isn't lost at low rates: every game frame is read from SteamVR's history.
+        bool focused = glfwGetWindowAttrib(window, GLFW_FOCUSED) && !glfwGetWindowAttrib(window, GLFW_ICONIFIED);
+        double targetFps = focused ? 30.0 : 10.0;
+        std::this_thread::sleep_until(now + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::duration<double>(1.0 / targetFps)));
+    }
+
+    if (pendingSaveAt) {
+        saveConfigToFile(configPath, config);
     }
 
     if (pVRSystem) {

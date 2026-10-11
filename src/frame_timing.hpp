@@ -11,7 +11,7 @@
 // the history is skipped because it may still be in flight (its GPU timings not yet filled in).
 class FrameTimingTracker {
 public:
-    static constexpr uint32_t kHistoryFrames = 32;      // frames requested per poll
+    static constexpr uint32_t kHistoryFrames = 64;      // frames requested per poll (covers ~0.4 s at 144 Hz)
     static constexpr double kWindowSeconds = 5.0;       // rolling window for the missed-frame stats
 
     struct PollResult {
