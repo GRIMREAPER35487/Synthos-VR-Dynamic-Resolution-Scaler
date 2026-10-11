@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <unordered_map>
 
 #include <openvr.h>
 
@@ -252,6 +253,19 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         SetCurrentDirectoryA(exeDir.substr(0, lastSlash).c_str());
     }
 
+    // Single instance: SteamVR autostart and the desktop shortcut can both launch us. Two copies would
+    // fight over the same per-app resolution setting, so focus the existing window and exit instead.
+    HANDLE hInstanceMutex = CreateMutexA(NULL, TRUE, "Local\\SynthosVRDynamicResolutionScaler");
+    if (hInstanceMutex && GetLastError() == ERROR_ALREADY_EXISTS) {
+        HWND existing = FindWindowA(NULL, "Synthos VR Dynamic Resolution Scaler");
+        if (existing) {
+            if (IsIconic(existing)) ShowWindow(existing, SW_RESTORE);
+            SetForegroundWindow(existing);
+        }
+        CloseHandle(hInstanceMutex);
+        return 0;
+    }
+
     bool launchedWithSteamVR = false;
     if (lpCmdLine != nullptr) {
         std::string cmd(lpCmdLine);
@@ -359,6 +373,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     uint32_t cachedNativeWidth = 2880;
     uint32_t cachedNativeHeight = 2880;
     std::string lastActiveAppKey = "";
+    std::unordered_map<std::string, float> gameScales; // Last scale per game this session, restored when it regains focus
+
+    // Stores the active game's scale and forgets it as active, so the next connection or game starts clean
+    auto parkActiveGame = [&]() {
+        if (!lastActiveAppKey.empty()) {
+            gameScales[lastActiveAppKey] = currentScale;
+            lastActiveAppKey.clear();
+        }
+    };
 
     const char* hzOptions[] = { 
         "36 Hz (72 Hz SSW / 27.78 ms)",
@@ -446,7 +469,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
                         vr::VR_Shutdown();
                         pVRSystem = nullptr;
                         steamVRActive = false;
-                        lastActiveAppKey = "";
+                        parkActiveGame();
                         lastAppliedVrScale = -1.0f;
                         smoothing.reset();
 
@@ -553,9 +576,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
                                 strncmp(appKeyBuf, "valve.steamvr.", 14) != 0);
 
             if (isSceneGame) {
-                // Game switched or initial launch: reset scaling state for immediate sync
-                if (std::string(appKeyBuf) != lastActiveAppKey) {
-                    lastActiveAppKey = std::string(appKeyBuf);
+                // Game switched or initial launch: start from this game's own last scale (100% if new),
+                // never the previous game's, and force a settings write for immediate sync
+                std::string appKey(appKeyBuf);
+                if (appKey != lastActiveAppKey) {
+                    parkActiveGame();
+                    auto it = gameScales.find(appKey);
+                    currentScale = (it != gameScales.end()) ? std::clamp(it->second, config.minScale, config.maxScale) : 1.0f;
+                    lastActiveAppKey = appKey;
                     lastAppliedVrScale = -1.0f;
                     smoothing.reset();
                 }
@@ -652,11 +680,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
                     logDebug("[VERBOSE EXCEPTION] Unknown exception in game scaling loop");
                 }
             } else {
+                // No game in focus (loading screen, dashboard, game closed). Keep the last game's scaling
+                // state so a brief focus loss doesn't snap it back to 100% when it returns.
                 activeAppKeyStr = "Waiting for VR Game (e.g. VRChat)...";
-                currentScale = 1.0f;
-                lastAppliedVrScale = -1.0f;
-                lastActiveAppKey = "";
-                smoothing.reset();
                 if (pShared) {
                     pShared->targetScale = 1.0f;
                     pShared->activeAppliedScale = 1.0f;
@@ -668,9 +694,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
                 }
             }
         } else {
+            parkActiveGame();
             currentScale = 1.0f;
             lastAppliedVrScale = -1.0f;
-            lastActiveAppKey = "";
             smoothing.reset();
             activeAppKeyStr = "None (SteamVR Idle / Settings Mode)";
             if (pShared) {
@@ -948,6 +974,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     }
     if (pShared) UnmapViewOfFile(pShared);
     if (hMapFile) CloseHandle(hMapFile);
+    if (hInstanceMutex) CloseHandle(hInstanceMutex);
 
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
