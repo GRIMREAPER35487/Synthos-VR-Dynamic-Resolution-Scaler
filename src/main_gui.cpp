@@ -13,6 +13,7 @@
 #include <thread>
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 
 #include <openvr.h>
 
@@ -25,11 +26,36 @@
 #include "smoothing_engine.hpp"
 
 static bool g_enableLogging = false;
+static std::filesystem::path g_dataDir; // %APPDATA%\Syn Dynamic Res Scale (writable even when installed to Program Files)
+
+// Resolves and creates the per-user data directory. Falls back to the working directory if APPDATA is unavailable.
+std::filesystem::path resolveDataDir() {
+    std::filesystem::path dir;
+    PWSTR roaming = nullptr;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, NULL, &roaming))) {
+        dir = std::filesystem::path(roaming) / L"Syn Dynamic Res Scale";
+    }
+    CoTaskMemFree(roaming);
+    if (dir.empty()) return {};
+
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    return ec ? std::filesystem::path{} : dir;
+}
+
+std::string pathToUtf8(const std::filesystem::path& p) {
+    const std::wstring& w = p.native();
+    if (w.empty()) return {};
+    int len = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), NULL, 0, NULL, NULL);
+    std::string out(len, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), out.data(), len, NULL, NULL);
+    return out;
+}
 
 void logDebug(const std::string& msg) {
     if (!g_enableLogging) return;
     try {
-        std::ofstream log("debug.log", std::ios::app);
+        std::ofstream log(g_dataDir / "debug.log", std::ios::app);
         if (log.is_open()) {
             auto now = std::chrono::system_clock::now();
             log << "[" << std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() << "] " << msg << std::flush;
@@ -78,9 +104,9 @@ struct AppConfig {
     float cpuEmergencyFloor = 0.50f;     // CPU Emergency Hard Floor Default 50%
 };
 
-void saveConfigToFile(const std::string& filepath, const AppConfig& cfg) {
+bool saveConfigToFile(const std::filesystem::path& filepath, const AppConfig& cfg) {
     std::ofstream file(filepath);
-    if (!file.is_open()) return;
+    if (!file.is_open()) return false;
     file << "[General]\n";
     file << "isEnabled=" << (cfg.isEnabled ? 1 : 0) << "\n";
     file << "autoDetectHz=" << (cfg.autoDetectHz ? 1 : 0) << "\n";
@@ -93,9 +119,11 @@ void saveConfigToFile(const std::string& filepath, const AppConfig& cfg) {
     file << "maxScale=" << cfg.maxScale << "\n";
     file << "cooldownSeconds=" << cfg.cooldownSeconds << "\n";
     file << "cpuEmergencyFloor=" << cfg.cpuEmergencyFloor << "\n";
+    file.flush();
+    return file.good();
 }
 
-void loadConfigFromFile(const std::string& filepath, AppConfig& cfg) {
+void loadConfigFromFile(const std::filesystem::path& filepath, AppConfig& cfg) {
     std::ifstream file(filepath);
     if (!file.is_open()) return;
     std::string line;
@@ -235,7 +263,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         launchedWithSteamVR = true;
     }
 
-    const std::string configPath = "settings.ini";
+    g_dataDir = resolveDataDir();
+    const std::filesystem::path configPath = g_dataDir / "settings.ini";
+    const std::string configPathStr = pathToUtf8(configPath);
     AppConfig config;
     loadConfigFromFile(configPath, config);
     g_enableLogging = config.enableLogging;
@@ -267,6 +297,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO(); (void)io;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    io.IniFilename = nullptr; // Single fixed full-window layout; nothing worth persisting (and the exe dir may be read-only)
 
     ImGui::StyleColorsDark();
     ImGuiStyle& style = ImGui::GetStyle();
@@ -345,7 +376,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     std::vector<float> gpuFrametimeHistory(100, 0.0f);
     std::vector<float> cpuFrametimeHistory(100, 0.0f);
 
-    std::string statusMessage = "Settings loaded from settings.ini";
+    std::string statusMessage = "Settings file: " + configPathStr;
     std::string activeAppKeyStr = "Waiting for VR Game (e.g. VRChat)...";
 
     vr::IVRSystem* pVRSystem = nullptr;
@@ -874,8 +905,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         }
 
         if (configChanged) {
-            saveConfigToFile(configPath, config);
-            statusMessage = "Settings saved to settings.ini";
+            statusMessage = saveConfigToFile(configPath, config)
+                ? "Settings saved to settings.ini"
+                : "ERROR: Could not save settings to " + configPathStr;
             configChanged = false;
         }
 
@@ -883,8 +915,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         ImGui::Separator();
 
         if (ImGui::Button("Save Settings Now", ImVec2(140, 24))) {
-            saveConfigToFile(configPath, config);
-            statusMessage = "Settings manually saved to settings.ini";
+            statusMessage = saveConfigToFile(configPath, config)
+                ? "Settings manually saved to settings.ini"
+                : "ERROR: Could not save settings to " + configPathStr;
         }
         ImGui::SameLine();
         ImGui::TextDisabled("%s", statusMessage.c_str());
