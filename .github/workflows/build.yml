@@ -1,8 +1,11 @@
 name: Build
 
+# Pushes to main and pull requests: build, test and attach the installer to the run as an artifact.
+# Pushing a version tag (e.g. v1.1.0) does the same and also publishes a GitHub Release with the installer.
 on:
   push:
     branches: [main]
+    tags: ["v*"]
     paths-ignore: ["**.md"]
   pull_request:
     paths-ignore: ["**.md"]
@@ -11,11 +14,21 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    permissions:
+      contents: write # needed to create releases on tag pushes
     steps:
       - uses: actions/checkout@v4
 
       - name: Configure
         run: cmake -S . -B build -A x64
+
+      - name: Check tag matches version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          $version = (Select-String -Path build/version.iss -Pattern '"(.+)"').Matches[0].Groups[1].Value
+          if ("v$version" -ne "${{ github.ref_name }}") {
+            throw "Tag ${{ github.ref_name }} does not match the version in CMakeLists.txt ($version)"
+          }
 
       - name: Build
         run: cmake --build build --config Release --parallel
@@ -38,3 +51,9 @@ jobs:
           name: installer
           path: installer_output/*.exe
           if-no-files-found: error
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" (Get-ChildItem installer_output/*.exe).FullName --title "${{ github.ref_name }}" --generate-notes
