@@ -169,6 +169,18 @@ void loadConfigFromFile(const std::filesystem::path& filepath, AppConfig& cfg) {
     }
 }
 
+// Writes a game's per-app resolution scale to SteamVR (integer percent + float). False if SteamVR isn't available.
+bool writeAppScale(const char* appKey, float scale) {
+    if (!vr::VRSettings() || !appKey || appKey[0] == '\0') return false;
+    int32_t intPct = static_cast<int32_t>(std::round(scale * 100.0f));
+    vr::EVRSettingsError err1 = vr::VRSettingsError_None;
+    vr::EVRSettingsError err2 = vr::VRSettingsError_None;
+    vr::VRSettings()->SetInt32(appKey, "resolutionScale", intPct, &err1);
+    vr::VRSettings()->SetFloat(appKey, vr::k_pch_SteamVR_SupersampleScale_Float, scale, &err2);
+    logDebug("[VERBOSE VRSETTINGS UPDATE] GameKey=" + std::string(appKey) + " IntScale=" + std::to_string(intPct) + "% FloatScale=" + std::to_string(scale));
+    return true;
+}
+
 // Reads the per-app scale SteamVR has stored for a game (normally the last value we wrote, so scaling
 // resumes where the previous session left off). Returns `fallback` when nothing usable is stored.
 float readStoredAppScale(const char* appKey, float fallback) {
@@ -437,6 +449,23 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         }
     };
 
+    // Game whose stored SteamVR scale is currently the "Force 50%" test value ("" if none)
+    std::string debugScaleKey;
+
+    // Puts the real scale back on a game still holding the 50% test value, so the test never outlives
+    // a game switch, SteamVR quitting, or this app closing. Call before parkActiveGame().
+    auto restoreDebugScale = [&]() {
+        if (debugScaleKey.empty()) return;
+        float realScale = 1.0f;
+        if (debugScaleKey == lastActiveAppKey) {
+            realScale = currentScale;
+        } else if (auto it = gameScales.find(debugScaleKey); it != gameScales.end()) {
+            realScale = it->second;
+        }
+        writeAppScale(debugScaleKey.c_str(), realScale);
+        debugScaleKey.clear();
+    };
+
     std::vector<float> gpuFrametimeHistory(100, 0.0f);
     std::vector<float> cpuFrametimeHistory(100, 0.0f);
 
@@ -504,6 +533,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
                     if (vrEvent.eventType == vr::VREvent_Quit || 
                         vrEvent.eventType == vr::VREvent_DriverRequestedQuit ||
                         (vrEvent.eventType == vr::VREvent_ProcessQuit && vrEvent.data.process.pid == GetCurrentProcessId())) {
+                        restoreDebugScale();
                         if (pVRSystem) pVRSystem->AcknowledgeQuit_Exiting();
                         if (vr::VROverlay() && overlayHandle != vr::k_ulOverlayHandleInvalid) {
                             vr::VROverlay()->DestroyOverlay(overlayHandle);
@@ -633,6 +663,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
                 // a settings write for immediate sync
                 std::string appKey(appKeyBuf);
                 if (appKey != lastActiveAppKey) {
+                    restoreDebugScale();
                     parkActiveGame();
                     auto it = gameScales.find(appKey);
                     float startScale = (it != gameScales.end()) ? it->second : readStoredAppScale(appKeyBuf, 1.0f);
@@ -666,34 +697,25 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
                         targetScalingHz = activeHz / 2.0f;
                     }
 
-                    if (pShared && pShared->isEnabled) {
+                    bool enabled = pShared && pShared->isEnabled;
+                    bool debugActive = pShared && pShared->debugForceBlack;
+
+                    if (enabled) {
                         smoothing.configure(targetScalingHz, pShared->minScale, pShared->maxScale, config.cooldownSeconds, config.enableCpuBalancing, config.cpuEmergencyFloor);
                         currentScale = smoothing.update(gpuMs, cpuMs, currentScale);
+                    }
 
-                        float appliedVrScale = currentScale;
-                        if (pShared->debugForceBlack) {
-                            appliedVrScale = 0.50f;
-                        }
+                    // The game's setting is managed while dynamic resolution is on, while the 50% test runs
+                    // (even with dynamic resolution off), and once more afterwards to undo the test value.
+                    // Otherwise, with dynamic resolution off, the setting is left alone.
+                    if (pShared && (enabled || debugActive || debugScaleKey == appKey)) {
+                        float appliedVrScale = debugActive ? 0.50f : currentScale;
 
                         // COMPLETE VRSETTINGS UPDATE WITH DUAL WRITE (Int32 + Float)
                         if (lastAppliedVrScale < 0.0f || std::abs(appliedVrScale - lastAppliedVrScale) >= 0.019f) {
-                            if (vr::VRSettings() != nullptr && appKeyBuf[0] != '\0') {
-                                int32_t intPct = static_cast<int32_t>(std::round(appliedVrScale * 100.0f));
-                                vr::EVRSettingsError err1 = vr::VRSettingsError_None;
-                                vr::EVRSettingsError err2 = vr::VRSettingsError_None;
-
-                                try {
-                                    // 1. Set Integer resolutionScale
-                                    vr::VRSettings()->SetInt32(appKeyBuf, "resolutionScale", intPct, &err1);
-
-                                    // 2. Set Float supersampleScale
-                                    vr::VRSettings()->SetFloat(appKeyBuf, vr::k_pch_SteamVR_SupersampleScale_Float, appliedVrScale, &err2);
-
-                                    lastAppliedVrScale = appliedVrScale;
-                                    logDebug("[VERBOSE VRSETTINGS UPDATE] GameKey=" + std::string(appKeyBuf) + " IntScale=" + std::to_string(intPct) + "% FloatScale=" + std::to_string(appliedVrScale));
-                                } catch (...) {
-                                    logDebug("[VERBOSE EXCEPTION] Exception during VRSettings update");
-                                }
+                            if (writeAppScale(appKeyBuf, appliedVrScale)) {
+                                lastAppliedVrScale = appliedVrScale;
+                                debugScaleKey = debugActive ? appKey : std::string();
                             }
                         }
 
@@ -1037,6 +1059,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     }
 
     if (pVRSystem) {
+        restoreDebugScale();
         if (vr::VROverlay() && overlayHandle != vr::k_ulOverlayHandleInvalid) {
             vr::VROverlay()->DestroyOverlay(overlayHandle);
         }
