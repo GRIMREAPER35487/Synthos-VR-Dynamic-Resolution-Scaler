@@ -25,6 +25,7 @@
 
 #include "ipc_shared_mem.hpp"
 #include "smoothing_engine.hpp"
+#include "frame_timing.hpp"
 
 static bool g_enableLogging = false;
 static std::filesystem::path g_dataDir; // %APPDATA%\Synthos VR Dynamic Resolution Scaler (writable even when installed to Program Files)
@@ -361,6 +362,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         }
     }
 
+    FrameTimingTracker frameTracker;
     SmoothingEngine smoothing;
     smoothing.configure(90.0f, config.minScale, config.maxScale, config.cooldownSeconds, config.enableCpuBalancing, config.cpuEmergencyFloor);
 
@@ -586,6 +588,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
                     lastActiveAppKey = appKey;
                     lastAppliedVrScale = -1.0f;
                     smoothing.reset();
+                    frameTracker.clearWindow();
                 }
 
                 activeAppKeyStr = std::string(appKeyBuf);
@@ -595,35 +598,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
                 }
 
                 try {
-                    if (vr::VRCompositor()) {
-                        vr::Compositor_FrameTiming timing{};
-                        timing.m_nSize = sizeof(vr::Compositor_FrameTiming);
-                        if (vr::VRCompositor()->GetFrameTiming(&timing, 0)) {
-                            // Prefer game pre-submit GPU time if available, fallback to total render GPU time
-                            float rawGpu = (timing.m_flPreSubmitGpuMs > 0.0f) 
-                                ? (timing.m_flPreSubmitGpuMs + timing.m_flPostSubmitGpuMs) 
-                                : timing.m_flTotalRenderGpuMs;
-                            
-                            // Filter out non-render noise samples
-                            if (rawGpu > 1.0f && rawGpu < 100.0f) {
-                                lastValidGpuMs = rawGpu;
-                            }
-                            gpuMs = lastValidGpuMs;
-
-                            // ACCURATE GAME CPU FRAMETIME: Time between WaitGetPoses return and second eye Submit
-                            float rawCpu = 0.0f;
-                            if (timing.m_flNewFrameReadyMs > timing.m_flNewPosesReadyMs) {
-                                rawCpu = timing.m_flNewFrameReadyMs - timing.m_flNewPosesReadyMs;
-                            }
-                            if (rawCpu <= 0.1f) {
-                                rawCpu = timing.m_flCompositorRenderCpuMs + timing.m_flSubmitFrameMs;
-                            }
-                            if (rawCpu > 0.1f && rawCpu < 100.0f) {
-                                lastValidCpuMs = rawCpu;
-                            }
-                            cpuMs = lastValidCpuMs;
-                        }
-                    }
+                    // Average every completed game frame since the last loop; keep the last good values if none arrived
+                    auto frames = frameTracker.poll(vr::VRCompositor());
+                    if (frames.hasGpu) lastValidGpuMs = frames.avgGpuMs;
+                    if (frames.hasCpu) lastValidCpuMs = frames.avgCpuMs;
+                    gpuMs = lastValidGpuMs;
+                    cpuMs = lastValidCpuMs;
 
                     float targetScalingHz = activeHz;
                     if (pShared && !pShared->autoDetectHz) {
@@ -698,6 +678,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
             currentScale = 1.0f;
             lastAppliedVrScale = -1.0f;
             smoothing.reset();
+            frameTracker.reset();
             activeAppKeyStr = "None (SteamVR Idle / Settings Mode)";
             if (pShared) {
                 pShared->targetScale = 1.0f;
@@ -758,7 +739,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         // --- TELEMETRY DASHBOARD ---
         if (ImGui::CollapsingHeader("Live Telemetry & Resolution Readout", ImGuiTreeNodeFlags_DefaultOpen)) {
             ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.12f, 0.13f, 0.16f, 1.00f));
-            ImGui::BeginChild("TelemetryFrame", ImVec2(0, 140), true);
+            ImGui::BeginChild("TelemetryFrame", ImVec2(0, 160), true);
 
             int hzIdx = std::clamp(config.selectedHzIndex, 0, (int)IM_ARRAYSIZE(hzValues) - 1);
             float effHz = config.autoDetectHz ? (config.useHalfRateSSW ? activeHz / 2.0f : activeHz) : hzValues[hzIdx];
@@ -768,7 +749,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
                 float currentPct = currentScale * 100.0f;
                 uint32_t w = pShared ? pShared->activeWidth : cachedNativeWidth;
                 uint32_t h = pShared ? pShared->activeHeight : cachedNativeHeight;
-                bool isCpuSpiking = (cpuMs > frameBudgetMs * 0.85f && cpuMs > gpuMs);
+                // Same state the scaling decision used (filtered timings + hold), not a separate raw-value guess
+                bool shieldActive = pShared && pShared->isEnabled && smoothing.isCpuBottlenecked();
+                auto frameStats = frameTracker.windowStats();
 
                 ImGui::Columns(2, "TeleCols", false);
                 ImGui::Text("Active Render Scale:");
@@ -785,12 +768,25 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
                 ImGui::SameLine();
                 ImGui::TextColored(ImVec4(0.2f, 0.65f, 1.00f, 1.0f), "CPU: %.1f ms", cpuMs);
 
-                if (isCpuSpiking && config.enableCpuBalancing) {
+                if (shieldActive) {
                     ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.4f, 1.0f), "[ AUTO CPU BOTTLENECK SHIELD ACTIVE ]");
                 } else {
                     ImGui::TextDisabled("State: Normal GPU Scaling");
                 }
-                
+
+                // SteamVR's own verdict on late frames: share reprojected, and whether CPU or GPU caused it
+                if (frameStats.frames > 0) {
+                    float latePct = 100.0f * frameStats.lateFrames / frameStats.frames;
+                    ImVec4 lateColor = latePct < 1.0f ? ImVec4(0.3f, 0.9f, 0.4f, 1.0f)
+                                     : latePct < 5.0f ? ImVec4(0.95f, 0.75f, 0.25f, 1.0f)
+                                                      : ImVec4(1.0f, 0.35f, 0.3f, 1.0f);
+                    ImGui::TextColored(lateColor, "Late frames (5 s): %.1f%%", latePct);
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("CPU %d | GPU %d", frameStats.cpuReprojected, frameStats.gpuReprojected);
+                } else {
+                    ImGui::TextDisabled("Late frames (5 s): waiting for frame data");
+                }
+
                 // DUAL OVERLAID GRAPH (GPU = Warm Orange | CPU = Cyan Blue)
                 float graphMaxMs = (std::max)(25.0f, frameBudgetMs * 1.5f);
                 ImVec2 graphSize = ImVec2(-1, 55);

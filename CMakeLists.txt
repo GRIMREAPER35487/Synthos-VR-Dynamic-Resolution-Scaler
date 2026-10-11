@@ -81,3 +81,5 @@ set_target_properties(Syn_Dynamic_Res_Scale PROPERTIES
 enable_testing()
 add_executable(smoothing_engine_tests tests/smoothing_engine_tests.cpp)
 add_test(NAME smoothing_engine_tests COMMAND smoothing_engine_tests)
+add_executable(frame_timing_tests tests/frame_timing_tests.cpp)
+add_test(NAME frame_timing_tests COMMAND frame_timing_tests)
