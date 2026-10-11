@@ -153,6 +153,23 @@ void loadConfigFromFile(const std::filesystem::path& filepath, AppConfig& cfg) {
     }
 }
 
+// Reads the per-app scale SteamVR has stored for a game (normally the last value we wrote, so scaling
+// resumes where the previous session left off). Returns `fallback` when nothing usable is stored.
+float readStoredAppScale(const char* appKey, float fallback) {
+    if (!vr::VRSettings()) return fallback;
+    vr::EVRSettingsError err = vr::VRSettingsError_None;
+    int32_t pct = vr::VRSettings()->GetInt32(appKey, "resolutionScale", &err);
+    if (err == vr::VRSettingsError_None && pct >= 20 && pct <= 500) {
+        return pct / 100.0f;
+    }
+    err = vr::VRSettingsError_None;
+    float scale = vr::VRSettings()->GetFloat(appKey, vr::k_pch_SteamVR_SupersampleScale_Float, &err);
+    if (err == vr::VRSettingsError_None && scale >= 0.2f && scale <= 5.0f) {
+        return scale;
+    }
+    return fallback;
+}
+
 // Dynamically registers manifest.vrmanifest into SteamVR cleanly via OpenVR API or safe JSON
 bool registerManifestWithSteamVR() {
     char exePath[MAX_PATH] = {0};
@@ -578,13 +595,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
                                 strncmp(appKeyBuf, "valve.steamvr.", 14) != 0);
 
             if (isSceneGame) {
-                // Game switched or initial launch: start from this game's own last scale (100% if new),
-                // never the previous game's, and force a settings write for immediate sync
+                // Game switched or initial launch: start from this game's own last scale (this session's,
+                // else the one SteamVR has stored for it, else 100%), never the previous game's, and force
+                // a settings write for immediate sync
                 std::string appKey(appKeyBuf);
                 if (appKey != lastActiveAppKey) {
                     parkActiveGame();
                     auto it = gameScales.find(appKey);
-                    currentScale = (it != gameScales.end()) ? std::clamp(it->second, config.minScale, config.maxScale) : 1.0f;
+                    float startScale = (it != gameScales.end()) ? it->second : readStoredAppScale(appKeyBuf, 1.0f);
+                    currentScale = std::clamp(startScale, config.minScale, config.maxScale);
+                    logDebug("[VERBOSE GAME SWITCH] GameKey=" + appKey + " StartScale=" + std::to_string(currentScale));
                     lastActiveAppKey = appKey;
                     lastAppliedVrScale = -1.0f;
                     smoothing.reset();
