@@ -76,3 +76,8 @@ target_link_libraries(Syn_Dynamic_Res_Scale PRIVATE
 set_target_properties(Syn_Dynamic_Res_Scale PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/Release"
 )
+
+# Unit tests for the scaling logic (header-only, no VR or GUI dependencies)
+enable_testing()
+add_executable(smoothing_engine_tests tests/smoothing_engine_tests.cpp)
+add_test(NAME smoothing_engine_tests COMMAND smoothing_engine_tests)

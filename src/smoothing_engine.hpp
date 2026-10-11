@@ -5,6 +5,8 @@
 
 class SmoothingEngine {
 public:
+    using Clock = std::chrono::steady_clock;
+
     SmoothingEngine() = default;
 
     void configure(float targetHz, float minScale = 0.65f, float maxScale = 1.20f, float cooldownSeconds = 3.0f, bool enableCpuBalancing = true, float cpuEmergencyFloor = 0.50f) {
@@ -19,27 +21,32 @@ public:
         m_cpuEmergencyFloor = std::clamp(cpuEmergencyFloor, 0.30f, 1.00f);
     }
 
-    // Pure GPU + Automatic CPU Bottleneck Detection & Smart Budget Ratio Update Loop
-    float update(float rawGpuMs, float rawCpuMs, float currentScale) {
+    // Pure GPU + Automatic CPU Bottleneck Detection & Smart Budget Ratio Update Loop.
+    // `now` is injectable for tests; callers normally omit it.
+    float update(float rawGpuMs, float rawCpuMs, float currentScale, Clock::time_point now = Clock::now()) {
         if (rawGpuMs <= 0.5f) return currentScale;
 
-        // 1. Exponential Moving Average (EMA) filter: GPU (alpha = 0.10) & Heavy CPU smoothing (alpha = 0.05)
-        constexpr float gpuAlpha = 0.10f;
-        constexpr float cpuAlpha = 0.05f;
+        // 1. Time-based Exponential Moving Average (EMA): GPU (tau = 160 ms) & heavier CPU smoothing (tau = 330 ms).
+        // Weighting by elapsed time keeps the response identical however often update() is called
+        // (the old fixed per-sample alpha of 0.10 / 0.05 matched these time constants at a 60 Hz call rate).
+        constexpr float gpuTauSeconds = 0.16f;
+        constexpr float cpuTauSeconds = 0.33f;
 
         if (m_filteredGpuMs <= 0.0f) {
             m_filteredGpuMs = rawGpuMs;
             m_filteredCpuMs = (rawCpuMs > 0.0f) ? rawCpuMs : 0.0f;
         } else {
+            float dt = std::clamp(std::chrono::duration<float>(now - m_lastUpdateTime).count(), 0.0f, 1.0f);
+            float gpuAlpha = 1.0f - std::exp(-dt / gpuTauSeconds);
+            float cpuAlpha = 1.0f - std::exp(-dt / cpuTauSeconds);
             m_filteredGpuMs = gpuAlpha * rawGpuMs + (1.0f - gpuAlpha) * m_filteredGpuMs;
             if (rawCpuMs > 0.0f) {
                 m_filteredCpuMs = cpuAlpha * rawCpuMs + (1.0f - cpuAlpha) * m_filteredCpuMs;
             }
         }
+        m_lastUpdateTime = now;
 
-        auto now = std::chrono::steady_clock::now();
-
-        // 2. CPU BOTTLENECK DETECTION & 3-SECOND HOLD DELAY:
+        // 2. CPU BOTTLENECK DETECTION & HOLD DELAY:
         // Detect CPU spike when filtered CPU exceeds 85% of target budget and exceeds GPU time
         bool rawCpuSpike = (m_filteredCpuMs > m_targetFrametimeMs * 0.85f) && (m_filteredCpuMs > m_filteredGpuMs);
         if (rawCpuSpike) {
@@ -47,26 +54,17 @@ public:
         }
 
         // Hold CPU Bottleneck Shield active for user-configured cooldownSeconds (default 3.0s) after spike ends
-        bool isCpuBottlenecked = false;
+        m_cpuBottlenecked = false;
         if (m_enableCpuBalancing && m_lastCpuSpikeTime.time_since_epoch().count() > 0) {
-            auto cpuSpikeElapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_lastCpuSpikeTime).count();
-            if (cpuSpikeElapsedMs < static_cast<long long>(m_cooldownSeconds * 1000.0f)) {
-                isCpuBottlenecked = true;
+            if (now - m_lastCpuSpikeTime < secondsToDuration(m_cooldownSeconds)) {
+                m_cpuBottlenecked = true;
             }
         }
 
-        // 3. Cooldown timer: Hold static between resolution changes to prevent texture thrashing
-        if (m_lastChangeTime.time_since_epoch().count() > 0) {
-            auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_lastChangeTime).count();
-            if (elapsedMs < static_cast<long long>(m_cooldownSeconds * 1000.0f)) {
-                return currentScale;
-            }
-        }
-
-        // 4. Target GPU Frametime Budget (85% of HMD refresh rate budget, e.g. 9.44ms for 90Hz)
+        // 3. Target GPU Frametime Budget (85% of HMD refresh rate budget, e.g. 9.44ms for 90Hz)
         float targetGpuBudgetMs = m_targetFrametimeMs * 0.85f;
 
-        if (isCpuBottlenecked) {
+        if (m_cpuBottlenecked) {
             float availableGpuBudget = m_targetFrametimeMs - m_filteredCpuMs;
 
             if (availableGpuBudget >= 3.0f) {
@@ -82,8 +80,24 @@ public:
             return currentScale;
         }
 
-        // Sweet-spot deadband (0.88x to 1.08x of target budget)
         float ratio = m_filteredGpuMs / targetGpuBudgetMs;
+
+        // 4. Cooldown timer: Hold static between resolution changes so the new resolution's frametime is
+        // measured before deciding again (and to prevent texture thrashing). Exception: a severe overrun
+        // may drop resolution early, once a short settle time has passed since the last change.
+        bool severeOverrunDropOnly = false;
+        if (m_lastChangeTime.time_since_epoch().count() > 0) {
+            auto sinceChange = now - m_lastChangeTime;
+            if (sinceChange < secondsToDuration(m_cooldownSeconds)) {
+                if (ratio > kSevereOverrunRatio && sinceChange >= secondsToDuration(kSevereOverrunSettleSeconds)) {
+                    severeOverrunDropOnly = true;
+                } else {
+                    return currentScale;
+                }
+            }
+        }
+
+        // Sweet-spot deadband (0.88x to 1.08x of target budget)
         if (ratio >= 0.88f && ratio <= 1.08f) {
             return currentScale; // Perfect sweet-spot: Keep resolution locked
         }
@@ -97,12 +111,16 @@ public:
 
         // Effective Minimum Scale Floor: Lower of user minScale or cpuEmergencyFloor when balancing is active
         float effectiveMinScale = m_minScale;
-        if (isCpuBottlenecked && m_cpuEmergencyFloor < effectiveMinScale) {
+        if (m_cpuBottlenecked && m_cpuEmergencyFloor < effectiveMinScale) {
             effectiveMinScale = m_cpuEmergencyFloor;
         }
 
         // Clamp strictly between effective min and max scale limits
         float newTargetScale = (std::clamp)(roundedScale, effectiveMinScale, m_maxScale);
+
+        if (severeOverrunDropOnly && newTargetScale >= currentScale) {
+            return currentScale;
+        }
 
         // 6. Apply ONCE if target differs from current scale by at least 2% (0.02)
         if (std::abs(newTargetScale - currentScale) >= 0.020f) {
@@ -116,11 +134,27 @@ public:
     void reset() {
         m_filteredGpuMs = 0.0f;
         m_filteredCpuMs = 0.0f;
+        m_cpuBottlenecked = false;
         m_lastChangeTime = {};
         m_lastCpuSpikeTime = {};
+        m_lastUpdateTime = {};
     }
 
+    // State as of the last update(), for display
+    bool isCpuBottlenecked() const { return m_cpuBottlenecked; }
+    float filteredGpuMs() const { return m_filteredGpuMs; }
+    float filteredCpuMs() const { return m_filteredCpuMs; }
+
+    // GPU this far over budget may drop resolution before the cooldown ends...
+    static constexpr float kSevereOverrunRatio = 1.25f;
+    // ...but only once this long has passed since the last change, so the current resolution is measured first
+    static constexpr float kSevereOverrunSettleSeconds = 1.0f;
+
 private:
+    static Clock::duration secondsToDuration(float seconds) {
+        return std::chrono::duration_cast<Clock::duration>(std::chrono::duration<float>(seconds));
+    }
+
     float m_targetHz = 90.0f;
     float m_targetFrametimeMs = 11.11f;
     float m_minScale = 0.65f;
@@ -130,6 +164,8 @@ private:
     float m_cpuEmergencyFloor = 0.50f;
     float m_filteredGpuMs = 0.0f;
     float m_filteredCpuMs = 0.0f;
-    std::chrono::steady_clock::time_point m_lastChangeTime{};
-    std::chrono::steady_clock::time_point m_lastCpuSpikeTime{};
+    bool m_cpuBottlenecked = false;
+    Clock::time_point m_lastChangeTime{};
+    Clock::time_point m_lastCpuSpikeTime{};
+    Clock::time_point m_lastUpdateTime{};
 };
