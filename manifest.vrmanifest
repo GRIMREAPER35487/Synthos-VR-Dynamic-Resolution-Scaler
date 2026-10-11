@@ -1,0 +1,20 @@
+{
+	"source" : "builtin",
+	"applications": [
+		{
+			"app_key": "steam.overlay.syn_dynamic_res_scale",
+			"launch_type": "binary",
+			"binary_path_windows": "Syn_Dynamic_Res_Scale.exe",
+			"arguments": "-autostarted",
+			"is_dashboard_overlay": true,
+			"autostart": true,
+
+			"strings": {
+				"en_us": {
+					"name": "Syn Dynamic Res Scale",
+					"description": "Per-App Dynamic Resolution Scaler for SteamVR"
+				}
+			}
+		}
+	]
+}

@@ -1,0 +1,11 @@
+# Build output
+build/
+installer_output/
+
+# Binaries (openvr_api.dll is pulled from build/_deps by the installer)
+*.exe
+*.dll
+
+# Local runtime files
+imgui.ini
+debug.log
