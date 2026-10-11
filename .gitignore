@@ -9,3 +9,6 @@ installer_output/
 # Local runtime files
 imgui.ini
 debug.log
+
+# Per-user settings now live in %APPDATA%\Syn Dynamic Res Scale
+settings.ini

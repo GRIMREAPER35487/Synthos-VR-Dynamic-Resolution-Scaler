@@ -18,7 +18,6 @@ UsePreviousAppDir=yes
 Source: "..\build\Release\Release\Syn_Dynamic_Res_Scale.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\build\_deps\openvr-src\bin\win64\openvr_api.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\manifest.vrmanifest"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\settings.ini"; DestDir: "{app}"; Flags: onlyifdoesntexist
 
 [Icons]
 Name: "{autoprograms}\Syn Dynamic Res Scale"; Filename: "{app}\Syn_Dynamic_Res_Scale.exe"
@@ -43,74 +42,25 @@ begin
   end;
 end;
 
-procedure RegisterSteamVR();
-var
-  AppConfigPath, ManifestPath, EscapedPath: string;
-  Lines: TArrayOfString;
-  I, BracketPos: Integer;
-  Found: Boolean;
-begin
-  AppConfigPath := GetSteamAppConfigPath();
-  ManifestPath := ExpandConstant('{app}\manifest.vrmanifest');
-  EscapedPath := ManifestPath;
-  StringChange(EscapedPath, '\', '\\');
+#include "steamvr_appconfig.iss"
 
-  if FileExists(AppConfigPath) then
-  begin
-    if LoadStringsFromFile(AppConfigPath, Lines) then
-    begin
-      Found := False;
-      for I := 0 to GetArrayLength(Lines) - 1 do
-      begin
-        if Pos(EscapedPath, Lines[I]) > 0 then
-        begin
-          Found := True;
-          Break;
-        end;
-      end;
-      
-      if not Found then
-      begin
-        for I := 0 to GetArrayLength(Lines) - 1 do
-        begin
-          BracketPos := Pos(']', Lines[I]);
-          if BracketPos > 0 then
-          begin
-            Lines[I] := '     ,"' + EscapedPath + '"' + #13#10 + '  ]';
-            SaveStringsToFile(AppConfigPath, Lines, False);
-            Break;
-          end;
-        end;
-      end;
-    end;
-  end;
+function GetManifestEntry(): string;
+var
+  EscapedPath: string;
+begin
+  EscapedPath := ExpandConstant('{app}\manifest.vrmanifest');
+  StringChange(EscapedPath, '\', '\\');
+  Result := '"' + EscapedPath + '"';
+end;
+
+procedure RegisterSteamVR();
+begin
+  AddManifestPath(GetSteamAppConfigPath(), GetManifestEntry());
 end;
 
 procedure UnregisterSteamVR();
-var
-  AppConfigPath, ManifestPath, EscapedPath: string;
-  Lines: TArrayOfString;
-  I: Integer;
 begin
-  AppConfigPath := GetSteamAppConfigPath();
-  ManifestPath := ExpandConstant('{app}\manifest.vrmanifest');
-  EscapedPath := ManifestPath;
-  StringChange(EscapedPath, '\', '\\');
-
-  if FileExists(AppConfigPath) then
-  begin
-    if LoadStringsFromFile(AppConfigPath, Lines) then
-    begin
-      for I := 0 to GetArrayLength(Lines) - 1 do
-      begin
-        if Pos(EscapedPath, Lines[I]) > 0 then
-        begin
-          Lines[I] := '';
-        end;
-      end;
-      SaveStringsToFile(AppConfigPath, Lines, False);
-    end;
-  end;
+  RemoveManifestPath(GetSteamAppConfigPath(), GetManifestEntry());
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
