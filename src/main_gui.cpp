@@ -94,6 +94,21 @@ bool isSteamVRActiveAndRunning() {
     return running;
 }
 
+// Manual target refresh rates (AppConfig::selectedHzIndex indexes these)
+static const char* const hzOptions[] = {
+    "36 Hz (72 Hz SSW / 27.78 ms)",
+    "40 Hz (80 Hz SSW / 25.00 ms)",
+    "45 Hz (90 Hz SSW / 22.22 ms)",
+    "60 Hz (120 Hz SSW / 16.67 ms)",
+    "72 Hz (Native / 13.89 ms)",
+    "80 Hz (Native / 12.50 ms)",
+    "90 Hz (Native / 11.11 ms)",
+    "120 Hz (Native / 8.33 ms)",
+    "144 Hz (Native / 6.94 ms)"
+};
+static const float hzValues[] = { 36.0f, 40.0f, 45.0f, 60.0f, 72.0f, 80.0f, 90.0f, 120.0f, 144.0f };
+static_assert(std::size(hzOptions) == std::size(hzValues));
+
 struct AppConfig {
     bool isEnabled = true;
     bool autoDetectHz = true;
@@ -142,7 +157,7 @@ void loadConfigFromFile(const std::filesystem::path& filepath, AppConfig& cfg) {
             else if (key == "enableLogging") cfg.enableLogging = (std::stoi(val) != 0);
             else if (key == "useHalfRateSSW") cfg.useHalfRateSSW = (std::stoi(val) != 0);
             else if (key == "enableCpuBalancing") cfg.enableCpuBalancing = (std::stoi(val) != 0);
-            else if (key == "selectedHzIndex") cfg.selectedHzIndex = std::clamp(std::stoi(val), 0, 8);
+            else if (key == "selectedHzIndex") cfg.selectedHzIndex = std::clamp(std::stoi(val), 0, (int)std::size(hzValues) - 1);
             else if (key == "minScale") cfg.minScale = std::clamp(std::stof(val), 0.30f, 1.00f);
             else if (key == "maxScale") cfg.maxScale = std::clamp(std::stof(val), 1.00f, 2.50f);
             else if (key == "cooldownSeconds") cfg.cooldownSeconds = std::clamp(std::stof(val), 0.5f, 10.0f);
@@ -171,8 +186,10 @@ float readStoredAppScale(const char* appKey, float fallback) {
     return fallback;
 }
 
+enum class RegisterResult { Registered, AlreadyRegistered, Failed };
+
 // Dynamically registers manifest.vrmanifest into SteamVR cleanly via OpenVR API or safe JSON
-bool registerManifestWithSteamVR() {
+RegisterResult registerManifestWithSteamVR() {
     char exePath[MAX_PATH] = {0};
     GetModuleFileNameA(NULL, exePath, MAX_PATH);
     std::string exeDir(exePath);
@@ -186,11 +203,12 @@ bool registerManifestWithSteamVR() {
 
     // 1. If OpenVR applications interface is already available, use official API
     if (vr::VRApplications() != nullptr) {
+        bool wasInstalled = vr::VRApplications()->IsApplicationInstalled("steam.overlay.syn_dynamic_res_scale");
         vr::EVRApplicationError err = vr::VRApplications()->AddApplicationManifest(manifestPath.c_str(), false);
         if (err == vr::VRApplicationError_None) {
             vr::VRApplications()->SetApplicationAutoLaunch("steam.overlay.syn_dynamic_res_scale", true);
             logDebug("[VERBOSE] Successfully registered manifest using VRApplications API");
-            return true;
+            return wasInstalled ? RegisterResult::AlreadyRegistered : RegisterResult::Registered;
         }
     }
 
@@ -234,7 +252,7 @@ bool registerManifestWithSteamVR() {
             size_t pos = content.find("manifest_paths");
             if (pos != std::string::npos) {
                 size_t bracketOpen = content.find("[", pos);
-                size_t bracketClose = content.find("]", bracketOpen != std::string::npos ? bracketOpen : pos);
+                size_t bracketClose = (bracketOpen != std::string::npos) ? content.find("]", bracketOpen) : std::string::npos;
                 if (bracketClose != std::string::npos) {
                     std::string arrayContent = content.substr(bracketOpen + 1, bracketClose - bracketOpen - 1);
                     bool hasElements = (arrayContent.find_first_not_of(" \t\r\n") != std::string::npos);
@@ -248,18 +266,18 @@ bool registerManifestWithSteamVR() {
                         outFile << content;
                         outFile.close();
                         logDebug("[VERBOSE] Successfully wrote manifest path to appconfig.json");
-                        return true;
+                        return RegisterResult::Registered;
                     }
                 }
             }
         } else {
             logDebug("[VERBOSE] Manifest already registered in appconfig.json");
-            return true;
+            return RegisterResult::AlreadyRegistered;
         }
     } else {
         logDebug("[VERBOSE ERROR] Failed to open Steam appconfig.json at: " + appConfigPath);
     }
-    return false;
+    return RegisterResult::Failed;
 }
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
@@ -406,6 +424,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     float lastValidCpuMs = 6.0f;
     uint32_t cachedNativeWidth = 2880;
     uint32_t cachedNativeHeight = 2880;
+    bool nativeSizeKnown = false;   // Recommended render size queried from the connected HMD
+    float intervalHz = 0.0f;        // Tier 3 refresh rate, measured once per connection (0 = not yet)
     std::string lastActiveAppKey = "";
     std::unordered_map<std::string, float> gameScales; // Last scale per game this session, restored when it regains focus
 
@@ -416,19 +436,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
             lastActiveAppKey.clear();
         }
     };
-
-    const char* hzOptions[] = { 
-        "36 Hz (72 Hz SSW / 27.78 ms)",
-        "40 Hz (80 Hz SSW / 25.00 ms)",
-        "45 Hz (90 Hz SSW / 22.22 ms)",
-        "60 Hz (120 Hz SSW / 16.67 ms)",
-        "72 Hz (Native / 13.89 ms)",
-        "80 Hz (Native / 12.50 ms)",
-        "90 Hz (Native / 11.11 ms)",
-        "120 Hz (Native / 8.33 ms)",
-        "144 Hz (Native / 6.94 ms)"
-    };
-    const float hzValues[] = { 36.0f, 40.0f, 45.0f, 60.0f, 72.0f, 80.0f, 90.0f, 120.0f, 144.0f };
 
     std::vector<float> gpuFrametimeHistory(100, 0.0f);
     std::vector<float> cpuFrametimeHistory(100, 0.0f);
@@ -469,6 +476,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
                         if (recW > 0 && recH > 0) {
                             cachedNativeWidth = recW;
                             cachedNativeHeight = recH;
+                            nativeSizeKnown = true;
                             if (pShared) {
                                 pShared->nativeWidth = recW;
                                 pShared->nativeHeight = recH;
@@ -504,6 +512,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
                         vr::VR_Shutdown();
                         pVRSystem = nullptr;
                         steamVRActive = false;
+                        // Wait ~10 s before trying to reconnect: vrserver is usually still running while it
+                        // shuts down, and connecting to it then could keep it alive or start it again
+                        lastVRCheckTime = now + std::chrono::seconds(8);
                         parkActiveGame();
                         lastAppliedVrScale = -1.0f;
                         smoothing.reset();
@@ -543,20 +554,25 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
                 }
             }
 
-            // Tier 3: Compositor Hardware VSync Frame Interval (Meta Quest, Virtual Desktop, Steam Link, ALVR)
-            if (detectedHz <= 30.0f && vr::VRCompositor()) {
-                vr::Compositor_FrameTiming timing{};
-                timing.m_nSize = sizeof(vr::Compositor_FrameTiming);
-                if (vr::VRCompositor()->GetFrameTiming(&timing, 0) && timing.m_flClientFrameIntervalMs > 3.0f && timing.m_flClientFrameIntervalMs < 40.0f) {
-                    float measuredHz = 1000.0f / timing.m_flClientFrameIntervalMs;
-                    for (float standardHz : { 72.0f, 80.0f, 90.0f, 120.0f, 144.0f }) {
-                        if (std::abs(measuredHz - standardHz) <= 2.5f) {
-                            measuredHz = standardHz;
-                            break;
+            // Tier 3: Measured frame interval (Meta Quest, Virtual Desktop, Steam Link, ALVR)
+            // The interval is the *game's* (time between WaitGetPoses calls), so it is measured once per
+            // connection and only accepted when it matches a standard rate. Re-measuring continuously would
+            // halve the target while the game reprojects at half rate, raising resolution exactly when it struggles.
+            if (detectedHz <= 30.0f) {
+                if (intervalHz <= 0.0f && vr::VRCompositor()) {
+                    vr::Compositor_FrameTiming timing{};
+                    timing.m_nSize = sizeof(vr::Compositor_FrameTiming);
+                    if (vr::VRCompositor()->GetFrameTiming(&timing, 1) && timing.m_flClientFrameIntervalMs > 3.0f && timing.m_flClientFrameIntervalMs < 40.0f) {
+                        float measuredHz = 1000.0f / timing.m_flClientFrameIntervalMs;
+                        for (float standardHz : { 72.0f, 80.0f, 90.0f, 120.0f, 144.0f }) {
+                            if (std::abs(measuredHz - standardHz) <= 2.5f) {
+                                intervalHz = standardHz;
+                                break;
+                            }
                         }
                     }
-                    detectedHz = measuredHz;
                 }
+                detectedHz = intervalHz;
             }
 
             if (detectedHz > 30.0f) {
@@ -565,12 +581,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
             }
 
             // Query native render target size if not initialized
-            if (pShared && (pShared->nativeWidth == 0 || pShared->nativeWidth == 2880)) {
+            if (pShared && !nativeSizeKnown) {
                 uint32_t recW = 0, recH = 0;
                 pVRSystem->GetRecommendedRenderTargetSize(&recW, &recH);
                 if (recW > 0 && recH > 0) {
                     cachedNativeWidth = recW;
                     cachedNativeHeight = recH;
+                    nativeSizeKnown = true;
                     pShared->nativeWidth = recW;
                     pShared->nativeHeight = recH;
                 }
@@ -715,6 +732,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
             lastAppliedVrScale = -1.0f;
             smoothing.reset();
             frameTracker.reset();
+            nativeSizeKnown = false;
+            intervalHz = 0.0f;
             activeAppKeyStr = "None (SteamVR Idle / Settings Mode)";
             if (pShared) {
                 pShared->targetScale = 1.0f;
@@ -763,10 +782,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
         ImGui::SameLine(ImGui::GetWindowWidth() - px(190));
         if (ImGui::Button("Register with SteamVR", ImVec2(px(175), px(24)))) {
-            if (registerManifestWithSteamVR()) {
+            switch (registerManifestWithSteamVR()) {
+            case RegisterResult::Registered:
                 statusMessage = "Registered! Restart SteamVR to see Synthos VR Dynamic Resolution Scaler in Startup Overlay Apps.";
-            } else {
-                statusMessage = "Already registered in Steam appconfig.json.";
+                break;
+            case RegisterResult::AlreadyRegistered:
+                statusMessage = "Already registered with SteamVR.";
+                break;
+            case RegisterResult::Failed:
+                statusMessage = "ERROR: Could not register with SteamVR (enable debug logging for details).";
+                break;
             }
         }
 

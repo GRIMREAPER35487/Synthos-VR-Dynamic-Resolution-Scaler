@@ -5,17 +5,11 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 if(MSVC)
-    add_compile_options(/EHa)
+    # Standard C++ exceptions only: crashes (access violations) are not silently swallowed by catch (...)
+    add_compile_options(/EHsc)
 endif()
 
 include(FetchContent)
-
-# Fetch fmt
-FetchContent_Declare(
-    fmt
-    GIT_REPOSITORY https://github.com/fmtlib/fmt.git
-    GIT_TAG        10.2.1
-)
 
 # Fetch GLFW for GUI Windowing
 FetchContent_Declare(
@@ -38,7 +32,7 @@ FetchContent_Declare(
     GIT_TAG        v1.23.7
 )
 
-FetchContent_MakeAvailable(fmt glfw imgui)
+FetchContent_MakeAvailable(glfw imgui)
 FetchContent_Populate(openvr)
 
 # ImGui sources for OpenGL3 + GLFW
@@ -47,7 +41,6 @@ set(IMGUI_SOURCES
     ${imgui_SOURCE_DIR}/imgui_draw.cpp
     ${imgui_SOURCE_DIR}/imgui_tables.cpp
     ${imgui_SOURCE_DIR}/imgui_widgets.cpp
-    ${imgui_SOURCE_DIR}/imgui_demo.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
 )
@@ -67,7 +60,6 @@ add_executable(Syn_Dynamic_Res_Scale WIN32
 )
 
 target_link_libraries(Syn_Dynamic_Res_Scale PRIVATE
-    fmt::fmt
     glfw
     opengl32
     ${openvr_SOURCE_DIR}/lib/win64/openvr_api.lib
