@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.20)
-project(Syn_Dynamic_Res_Scale CXX C)
+# The single source of the version number: the app (version.hpp) and installer (version.iss) are generated from it
+project(Syn_Dynamic_Res_Scale VERSION 1.1.0 LANGUAGES CXX C)
+
+configure_file(src/version.hpp.in ${CMAKE_BINARY_DIR}/generated/version.hpp @ONLY)
+configure_file(installer/version.iss.in ${CMAKE_BINARY_DIR}/version.iss @ONLY)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -47,6 +51,7 @@ set(IMGUI_SOURCES
 
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_BINARY_DIR}/generated
     ${imgui_SOURCE_DIR}
     ${imgui_SOURCE_DIR}/backends
     ${glfw_SOURCE_DIR}/include

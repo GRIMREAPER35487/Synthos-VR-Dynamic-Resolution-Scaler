@@ -1,7 +1,12 @@
+; Version comes from CMakeLists.txt (project VERSION) via the generated build\version.iss,
+; so build the app with CMake before compiling this installer.
+#include "..\build\version.iss"
+
 [Setup]
 AppId={{8F5B8F9A-4C2E-4D1E-8B3F-9A0B1C2D3E4F}}
 AppName=Synthos VR Dynamic Resolution Scaler
-AppVersion=1.0.0
+AppVersion={#AppVersion}
+VersionInfoVersion={#AppVersion}
 AppPublisher=Synthos
 DefaultDirName={autopf}\Synthos VR Dynamic Resolution Scaler
 DefaultGroupName=Synthos VR Dynamic Resolution Scaler
@@ -9,7 +14,7 @@ UninstallDisplayIcon={app}\Syn_Dynamic_Res_Scale.exe
 Compression=lzma2/ultra64
 SolidCompression=yes
 OutputDir=..\installer_output
-OutputBaseFilename=Synthos_VR_Dynamic_Resolution_Scaler_Setup
+OutputBaseFilename=Synthos_VR_Dynamic_Resolution_Scaler_Setup_{#AppVersion}
 CloseApplications=force
 CloseApplicationsFilter=*Syn_Dynamic_Res_Scale*
 UsePreviousAppDir=yes
@@ -66,6 +71,56 @@ end;
 procedure UnregisterSteamVR();
 begin
   RemoveManifestPath(GetSteamAppConfigPath(), GetManifestEntry());
+end;
+
+// True if any of SteamVR's processes are running
+function IsSteamVRRunning(): Boolean;
+var
+  WbemLocator, WbemServices, Processes: Variant;
+begin
+  Result := False;
+  try
+    WbemLocator := CreateOleObject('WbemScripting.SWbemLocator');
+    WbemServices := WbemLocator.ConnectServer('.', 'root\CIMV2');
+    Processes := WbemServices.ExecQuery('SELECT Name FROM Win32_Process WHERE Name = ''vrserver.exe'' OR Name = ''vrmonitor.exe'' OR Name = ''vrcompositor.exe''');
+    Result := Processes.Count > 0;
+  except
+    Result := False; // Can't tell; don't block the install
+  end;
+end;
+
+// SteamVR keeps its app registrations in memory and may write appconfig.json back when it exits,
+// undoing the (un)registration below, so ask for it to be closed first. Silent installs continue.
+function ConfirmSteamVRClosed(): Boolean;
+begin
+  Result := True;
+  while IsSteamVRRunning() do
+  begin
+    case SuppressibleMsgBox('SteamVR is running. Please close SteamVR first, otherwise it may undo the change that ' +
+      'registers this app with SteamVR (or removes it, when uninstalling).' + #13#10#13#10 +
+      'Retry: check again after closing SteamVR' + #13#10 +
+      'Ignore: continue anyway' + #13#10 +
+      'Abort: exit setup',
+      mbError, MB_ABORTRETRYIGNORE, IDIGNORE) of
+      IDABORT:
+        begin
+          Result := False;
+          Exit;
+        end;
+      IDIGNORE:
+        Exit;
+    end;
+  end;
+end;
+
+function InitializeSetup(): Boolean;
+begin
+  Result := ConfirmSteamVRClosed();
+end;
+
+function InitializeUninstall(): Boolean;
+begin
+  Result := ConfirmSteamVRClosed();
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);

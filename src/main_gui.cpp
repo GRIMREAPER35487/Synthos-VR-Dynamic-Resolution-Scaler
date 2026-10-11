@@ -27,6 +27,7 @@
 #include "ipc_shared_mem.hpp"
 #include "smoothing_engine.hpp"
 #include "frame_timing.hpp"
+#include "version.hpp"
 
 static bool g_enableLogging = false;
 static std::filesystem::path g_dataDir; // %APPDATA%\Synthos VR Dynamic Resolution Scaler (writable even when installed to Program Files)
@@ -334,7 +335,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     g_enableLogging = config.enableLogging;
 
     logDebug("==================================================");
-    logDebug("[VERBOSE STARTUP] Synthos VR Dynamic Resolution Scaler Version 1.0.0 (LaunchedWithVR: " + std::string(launchedWithSteamVR ? "Yes" : "No") + ")");
+    logDebug("[VERBOSE STARTUP] Synthos VR Dynamic Resolution Scaler Version " APP_VERSION " (LaunchedWithVR: " + std::string(launchedWithSteamVR ? "Yes" : "No") + ")");
 
     if (!glfwInit()) {
         logDebug("[VERBOSE ERROR] Failed to initialize GLFW windowing system");
@@ -789,7 +790,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         // --- HEADER BAR ---
         ImGui::TextColored(ImVec4(0.3f, 0.7f, 1.0f, 1.0f), "SYNTHOS VR DYNAMIC RESOLUTION SCALER");
         ImGui::SameLine();
-        ImGui::TextDisabled("| Per-App Dynamic Resolution");
+        ImGui::TextDisabled("| Per-App Dynamic Resolution | v" APP_VERSION);
 
         ImGui::Separator();
         ImGui::Spacing();
