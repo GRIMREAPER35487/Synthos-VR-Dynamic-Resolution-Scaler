@@ -10,5 +10,5 @@ installer_output/
 imgui.ini
 debug.log
 
-# Per-user settings now live in %APPDATA%\Syn Dynamic Res Scale
+# Per-user settings now live in %APPDATA%\Synthos VR Dynamic Resolution Scaler
 settings.ini

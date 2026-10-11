@@ -26,14 +26,14 @@
 #include "smoothing_engine.hpp"
 
 static bool g_enableLogging = false;
-static std::filesystem::path g_dataDir; // %APPDATA%\Syn Dynamic Res Scale (writable even when installed to Program Files)
+static std::filesystem::path g_dataDir; // %APPDATA%\Synthos VR Dynamic Resolution Scaler (writable even when installed to Program Files)
 
 // Resolves and creates the per-user data directory. Falls back to the working directory if APPDATA is unavailable.
 std::filesystem::path resolveDataDir() {
     std::filesystem::path dir;
     PWSTR roaming = nullptr;
     if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, NULL, &roaming))) {
-        dir = std::filesystem::path(roaming) / L"Syn Dynamic Res Scale";
+        dir = std::filesystem::path(roaming) / L"Synthos VR Dynamic Resolution Scaler";
     }
     CoTaskMemFree(roaming);
     if (dir.empty()) return {};
@@ -271,7 +271,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     g_enableLogging = config.enableLogging;
 
     logDebug("==================================================");
-    logDebug("[VERBOSE STARTUP] Syn Dynamic Res Scale Version 1.0.0 (LaunchedWithVR: " + std::string(launchedWithSteamVR ? "Yes" : "No") + ")");
+    logDebug("[VERBOSE STARTUP] Synthos VR Dynamic Resolution Scaler Version 1.0.0 (LaunchedWithVR: " + std::string(launchedWithSteamVR ? "Yes" : "No") + ")");
 
     if (!glfwInit()) {
         logDebug("[VERBOSE ERROR] Failed to initialize GLFW windowing system");
@@ -283,7 +283,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
-    GLFWwindow* window = glfwCreateWindow(720, 690, "Syn Dynamic Res Scale", NULL, NULL);
+    GLFWwindow* window = glfwCreateWindow(720, 690, "Synthos VR Dynamic Resolution Scaler", NULL, NULL);
     if (!window) {
         logDebug("[VERBOSE ERROR] Failed to create GLFW window");
         glfwTerminate();
@@ -402,7 +402,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
                     if (err == vr::VRInitError_None && pVRSystem) {
                         steamVRActive = true;
                         if (vr::VROverlay()) {
-                            vr::VROverlay()->CreateOverlay("steam.overlay.syn_dynamic_res_scale", "Syn Dynamic Res Scale", &overlayHandle);
+                            vr::VROverlay()->CreateOverlay("steam.overlay.syn_dynamic_res_scale", "Synthos VR Dynamic Resolution Scaler", &overlayHandle);
                         }
 
                         // Query native recommended render size upon connection
@@ -699,11 +699,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         ImGui::SetNextWindowPos(ImVec2(0, 0));
         ImGui::SetNextWindowSize(ImVec2((float)win_w, (float)win_h));
 
-        ImGui::Begin("Syn Dynamic Res Scale", NULL, 
+        ImGui::Begin("Synthos VR Dynamic Resolution Scaler", NULL, 
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove);
 
         // --- HEADER BAR ---
-        ImGui::TextColored(ImVec4(0.3f, 0.7f, 1.0f, 1.0f), "SYN DYNAMIC RES SCALE");
+        ImGui::TextColored(ImVec4(0.3f, 0.7f, 1.0f, 1.0f), "SYNTHOS VR DYNAMIC RESOLUTION SCALER");
         ImGui::SameLine();
         ImGui::TextDisabled("| Per-App Dynamic Resolution");
 
@@ -721,7 +721,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         ImGui::SameLine(ImGui::GetWindowWidth() - 190);
         if (ImGui::Button("Register with SteamVR", ImVec2(175, 24))) {
             if (registerManifestWithSteamVR()) {
-                statusMessage = "Registered! Restart SteamVR to see Syn Dynamic Res Scale in Startup Overlay Apps.";
+                statusMessage = "Registered! Restart SteamVR to see Synthos VR Dynamic Resolution Scaler in Startup Overlay Apps.";
             } else {
                 statusMessage = "Already registered in Steam appconfig.json.";
             }
