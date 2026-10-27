@@ -13,13 +13,24 @@ It runs as a SteamVR overlay app (it can start automatically with SteamVR) and c
 - **Live telemetry**: current scale and render size, GPU/CPU frame times, and SteamVR's own late-frame statistics (and whether the CPU or GPU caused them).
 - **"Force 50%" test** to check that resolution changes take effect in a game.
 
+## Requirements
+
+- Windows 10 or 11 (64-bit)
+- SteamVR
+
 ## Install
 
-1. Close SteamVR.
-2. Run `Synthos_VR_Dynamic_Resolution_Scaler_Setup_<version>.exe`.
-3. Start SteamVR. The app is registered as a startup overlay app; you can toggle it under SteamVR's *Startup Overlay Apps* settings.
+1. Download the latest installer from the [Releases](https://github.com/GRIMREAPER35487/Synthos-VR-Dynamic-Resolution-Scaler/releases) page.
+2. Close SteamVR.
+3. Run `Synthos_VR_Dynamic_Resolution_Scaler_Setup_<version>.exe`. The installer isn't code-signed, so Windows SmartScreen may warn about it: click **More info**, then **Run anyway**.
+4. Start SteamVR. The app is registered as a startup overlay app; you can toggle it under SteamVR's *Startup Overlay Apps* settings.
 
 If the app doesn't show up in SteamVR, open it and click **Register with SteamVR**, then restart SteamVR.
+
+## Known limitations
+
+- Some games only pick up a resolution change when they're restarted, or only at certain points (e.g. loading a level). Use the **Force 50%** test to check whether a game applies changes live.
+- The scaler only reacts to GPU frame time; it can't make a CPU-bound game run faster, though the CPU bottleneck shield keeps the GPU load inside what's left of the frame budget.
 
 ## Usage
 
@@ -75,3 +86,5 @@ GitHub Actions builds the app, runs both test suites and produces the installer 
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+This app uses Dear ImGui, GLFW and the OpenVR SDK; their licenses are in [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt), which is also installed alongside the app.
