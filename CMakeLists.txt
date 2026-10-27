@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 # The single source of the version number: the app (version.hpp) and installer (version.iss) are generated from it
-project(Syn_Dynamic_Res_Scale VERSION 1.1.1 LANGUAGES CXX C)
+project(Syn_Dynamic_Res_Scale VERSION 1.1.2 LANGUAGES CXX C)
 
 configure_file(src/version.hpp.in ${CMAKE_BINARY_DIR}/generated/version.hpp @ONLY)
 configure_file(installer/version.iss.in ${CMAKE_BINARY_DIR}/version.iss @ONLY)

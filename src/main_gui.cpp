@@ -433,6 +433,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     float activeHz = 90.0f;
     float currentScale = 1.0f;
     float lastAppliedVrScale = 1.0f;
+    auto lastScaleVerifyTime = std::chrono::steady_clock::now();
     float lastValidGpuMs = 8.0f;
     float lastValidCpuMs = 6.0f;
     uint32_t cachedNativeWidth = 2880;
@@ -711,6 +712,18 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
                     // Otherwise, with dynamic resolution off, the setting is left alone.
                     if (pShared && (enabled || debugActive || debugScaleKey == appKey)) {
                         float appliedVrScale = debugActive ? 0.50f : currentScale;
+
+                        // Self-heal: every few seconds, check SteamVR still holds the value we last wrote. If something
+                        // else changed it (e.g. SteamVR's per-app settings page), write ours again below.
+                        if (lastAppliedVrScale >= 0.0f && now - lastScaleVerifyTime >= std::chrono::seconds(5)) {
+                            lastScaleVerifyTime = now;
+                            float storedScale = readStoredAppScale(appKeyBuf, -1.0f);
+                            if (std::abs(storedScale - lastAppliedVrScale) >= 0.01f) {
+                                logDebug("[VERBOSE VRSETTINGS MISMATCH] GameKey=" + appKey + " Stored=" + std::to_string(storedScale) +
+                                         " Expected=" + std::to_string(lastAppliedVrScale) + " - rewriting");
+                                lastAppliedVrScale = -1.0f;
+                            }
+                        }
 
                         // COMPLETE VRSETTINGS UPDATE WITH DUAL WRITE (Int32 + Float)
                         if (lastAppliedVrScale < 0.0f || std::abs(appliedVrScale - lastAppliedVrScale) >= 0.019f) {
