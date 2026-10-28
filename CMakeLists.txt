@@ -1,9 +1,10 @@
 cmake_minimum_required(VERSION 3.20)
 # The single source of the version number: the app (version.hpp) and installer (version.iss) are generated from it
-project(Syn_Dynamic_Res_Scale VERSION 1.1.2 LANGUAGES CXX C)
+project(Syn_Dynamic_Res_Scale VERSION 1.1.3 LANGUAGES CXX C)
 
 configure_file(src/version.hpp.in ${CMAKE_BINARY_DIR}/generated/version.hpp @ONLY)
 configure_file(installer/version.iss.in ${CMAKE_BINARY_DIR}/version.iss @ONLY)
+configure_file(src/app.rc.in ${CMAKE_BINARY_DIR}/generated/app.rc @ONLY)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -61,6 +62,7 @@ include_directories(
 # Executable target: Syn_Dynamic_Res_Scale
 add_executable(Syn_Dynamic_Res_Scale WIN32
     src/main_gui.cpp
+    ${CMAKE_BINARY_DIR}/generated/app.rc
     ${IMGUI_SOURCES}
 )
 
